@@ -1,0 +1,21 @@
+---
+# Migré depuis vars/projects/element-web.yml (devops_staging_prod_infra)
+# Client web Matrix. Résout ARB-008 : le contrat de routage ne dépend pas
+# du contenu interne du rôle element_web (vérifié : aucune référence à
+# root.crt/CA/trust store dans ce rôle, cohérent avec un client statique
+# servi en HTTPS standard).
+project_name: element-web
+domain: element.lavallee.local
+
+published_services:
+  - service_id: web
+    listen_port: 443
+    frontend_protocol: https
+    routes:
+      - route_id: default
+        path: /
+        handler: reverse_proxy
+        backends:
+          - backend_id: primary
+            host: 192.168.1.80
+            target_port: 8080

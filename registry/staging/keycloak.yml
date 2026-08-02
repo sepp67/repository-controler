@@ -1,0 +1,21 @@
+---
+# Migré depuis vars/projects/keycloak.yml (devops_staging_prod_infra)
+# Service IAM externe, administré manuellement sur vm-keycloak-staging.
+# La valeur keycloak_backend_host (192.168.1.76) est marquée TODO dans le
+# dépôt source malgré une valeur déjà présente — à reconfirmer avant la
+# première convergence (cf. checklist F12.2/T13.2.1 de 06B v0.2).
+project_name: keycloak
+domain: keycloak.lavallee.local
+
+published_services:
+  - service_id: web
+    listen_port: 443
+    frontend_protocol: https
+    routes:
+      - route_id: default
+        path: /
+        handler: reverse_proxy
+        backends:
+          - backend_id: primary
+            host: 192.168.1.76
+            target_port: 8080

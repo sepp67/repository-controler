@@ -1,0 +1,13 @@
+---
+# Variables du groupe [proxy] — production
+# caddy_acme_email reprend la valeur réelle déjà en usage dans
+# devops_staging_prod_infra (inventories/production/group_vars/all/main.yml).
+
+environment_name: production
+
+# ── Caddy ────────────────────────────────────────────────────────────────────
+caddy_tls_mode: acme
+caddy_acme_email: admin@lavallee.tech
+
+# Aucun endpoint de distribution de CA en production (04E § 10.3) :
+# staging_ca_endpoint_domain n'est pas défini ici.

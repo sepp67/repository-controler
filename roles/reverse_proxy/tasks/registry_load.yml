@@ -1,0 +1,238 @@
+---
+# roles/reverse_proxy/tasks/registry_load.yml
+#
+# Rôle (04E § 7.3, § 9.2, § 9.3 ; 06B v0.2 T1.2.2bis) :
+#   - charge chaque fiche YAML de `registry_path` ;
+#   - valide, via ansible.builtin.assert, tout ce que le schéma JSON de CI
+#     (schemas/registry-entry.schema.json, T1.2.1bis) ne peut pas exprimer
+#     lui-même : les invariants d'unicité composites de 04E § 6.11 et la
+#     correspondance nom de fichier / project_name (04E § 6.2) — cf. la
+#     répartition explicite documentée en 04E § 6.13 ;
+#   - échoue avant tout rendu si une seule fiche est invalide (04E § 6.13,
+#     § 9.2) : aucune application partielle n'est tolérée ;
+#   - si `domain` est défini (mode ciblé, converge-route.yml), résout
+#     `domain → project_name` parmi les fiches déjà validées, et échoue
+#     explicitement pour une sélection ambiguë (zéro ou plusieurs
+#     correspondances — 04E § 9.3).
+#
+# Appelé par : tous les points d'entrée du rôle (main.yml, converge_route.yml).
+# Précondition : `registry_path` est déjà défini (variable de rôle dérivée,
+# 04E § 7.4, déclarée par defaults/main.yml — T2.2.3).
+#
+# Sortie : `registry_entries`, liste des fiches validées, chacune sous la
+# forme `{project_name, domain, published_services: [...]}`.
+# Si `domain` était fourni : `registry_resolved_project_name`.
+
+- name: Vérifier que registry_path est défini
+  ansible.builtin.assert:
+    that:
+      - registry_path is defined
+      - registry_path | length > 0
+    fail_msg: "registry_load.yml requiert que registry_path soit défini avant son inclusion (04E § 7.4)."
+  run_once: true
+  delegate_to: localhost
+
+- name: Lister les fiches du registre pour l'environnement courant
+  ansible.builtin.find:
+    paths: "{{ registry_path }}"
+    patterns: "*.yml"
+    file_type: file
+  register: _registry_files
+  run_once: true
+  delegate_to: localhost
+
+- name: Échouer si aucune fiche n'est trouvée dans le registre de l'environnement
+  ansible.builtin.assert:
+    that:
+      - _registry_files.files | length > 0
+    fail_msg: "Aucune fiche *.yml trouvée dans {{ registry_path }}."
+  run_once: true
+  delegate_to: localhost
+
+- name: Charger le contenu brut de chaque fiche
+  ansible.builtin.set_fact:
+    _registry_entries_raw: "{{ _registry_entries_raw | default([]) + [{'path': item.path, 'data': (lookup('file', item.path) | from_yaml)}] }}"
+  loop: "{{ _registry_files.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  run_once: true
+  delegate_to: localhost
+
+- name: Valider la correspondance nom de fichier / project_name de chaque fiche
+  ansible.builtin.assert:
+    that:
+      - entry.data.project_name is defined
+      - (entry.path | basename | regex_replace('\.ya?ml$', '')) == entry.data.project_name
+    fail_msg: >-
+      {{ entry.path }} : le nom de fichier ne correspond pas au project_name déclaré
+      ({{ entry.data.project_name | default('absent') }}) — 04E § 6.2.
+  loop: "{{ _registry_entries_raw }}"
+  loop_control:
+    loop_var: entry
+    label: "{{ entry.path }}"
+  run_once: true
+  delegate_to: localhost
+
+- name: Valider les champs obligatoires et le format des identifiants de chaque fiche
+  ansible.builtin.assert:
+    that:
+      - entry.data.project_name is match('^[a-z0-9-]+$')
+      - entry.data.domain is defined
+      - entry.data.domain | length > 0
+      - entry.data.published_services is defined
+      - entry.data.published_services | length > 0
+    fail_msg: "{{ entry.path }} : champ obligatoire manquant ou identifiant hors format [a-z0-9-]+ (04E § 6.5, § 6.11)."
+  loop: "{{ _registry_entries_raw }}"
+  loop_control:
+    loop_var: entry
+    label: "{{ entry.path }}"
+  run_once: true
+  delegate_to: localhost
+
+- name: Vérifier l'unicité de project_name au sein de l'environnement
+  ansible.builtin.assert:
+    that:
+      - (_registry_entries_raw | map(attribute='data.project_name') | list)
+          == (_registry_entries_raw | map(attribute='data.project_name') | unique | list)
+    fail_msg: "project_name dupliqué dans {{ registry_path }} (04E § 6.11)."
+  run_once: true
+  delegate_to: localhost
+
+- name: Vérifier le format et l'unicité de service_id, et l'unicité du couple (frontend_protocol, listen_port), dans chaque fiche
+  ansible.builtin.assert:
+    that:
+      - (entry.data.published_services | map(attribute='service_id') | list)
+          == (entry.data.published_services | map(attribute='service_id') | unique | list)
+      - (entry.data.published_services | map(attribute='service_id') | select('match', '^[a-z0-9-]+$') | list | length)
+          == (entry.data.published_services | length)
+      - (_service_keys | list) == (_service_keys | unique | list)
+    fail_msg: >-
+      {{ entry.path }} : service_id dupliqué, hors format, ou couple
+      (frontend_protocol, listen_port) dupliqué (04E § 6.11).
+  vars:
+    _service_keys: "{{ entry.data.published_services | map(attribute='frontend_protocol') | zip(entry.data.published_services | map(attribute='listen_port') | map('string')) | map('join', ':') | list }}"
+  loop: "{{ _registry_entries_raw }}"
+  loop_control:
+    loop_var: entry
+    label: "{{ entry.path }}"
+  run_once: true
+  delegate_to: localhost
+
+- name: Valider chaque service publié (champs obligatoires, routes non vides)
+  ansible.builtin.assert:
+    that:
+      - item.1.listen_port is defined
+      - item.1.frontend_protocol is defined
+      - item.1.frontend_protocol in ['http', 'https']
+      - item.1.routes is defined
+      - item.1.routes | length > 0
+    fail_msg: "{{ item.0.path }} / service {{ item.1.service_id | default('?') }} : champ obligatoire manquant (04E § 6.5)."
+  loop: "{{ _registry_entries_raw | subelements('data.published_services') }}"
+  loop_control:
+    label: "{{ item.0.path }} / {{ item.1.service_id | default('?') }}"
+  run_once: true
+  delegate_to: localhost
+
+- name: Vérifier le format et l'unicité de route_id au sein de chaque service
+  ansible.builtin.assert:
+    that:
+      - (item.1.routes | map(attribute='route_id') | list)
+          == (item.1.routes | map(attribute='route_id') | unique | list)
+      - (item.1.routes | map(attribute='route_id') | select('match', '^[a-z0-9-]+$') | list | length)
+          == (item.1.routes | length)
+    fail_msg: "{{ item.0.path }} / service {{ item.1.service_id | default('?') }} : route_id dupliqué ou hors format (04E § 6.11)."
+  loop: "{{ _registry_entries_raw | subelements('data.published_services') }}"
+  loop_control:
+    label: "{{ item.0.path }} / {{ item.1.service_id | default('?') }}"
+  run_once: true
+  delegate_to: localhost
+
+- name: Aplatir les paires (fiche, service) en dictionnaires pour la validation des routes
+  ansible.builtin.set_fact:
+    _service_pairs: "{{ _service_pairs | default([]) + [{'entry': item.0, 'service': item.1}] }}"
+  loop: "{{ _registry_entries_raw | subelements('data.published_services') }}"
+  loop_control:
+    label: "{{ item.0.path }} / {{ item.1.service_id | default('?') }}"
+  run_once: true
+  delegate_to: localhost
+
+- name: Valider le handler de chaque route et l'exclusivité backends / redirect
+  ansible.builtin.assert:
+    that:
+      - item.1.handler in ['reverse_proxy', 'redirect']
+      - not (item.1.handler == 'reverse_proxy' and (item.1.backends is not defined or item.1.backends | length == 0))
+      - not (item.1.handler == 'reverse_proxy' and item.1.redirect is defined)
+      - not (item.1.handler == 'redirect' and item.1.redirect is not defined)
+      - not (item.1.handler == 'redirect' and item.1.backends is defined)
+    fail_msg: >-
+      {{ item.0.entry.path }} / service {{ item.0.service.service_id | default('?') }} / route
+      {{ item.1.route_id | default('?') }} : handler invalide ou backends/redirect
+      non exclusifs (04E § 6.9).
+  loop: "{{ _service_pairs | subelements('service.routes') }}"
+  loop_control:
+    label: "{{ item.0.entry.path }} / {{ item.0.service.service_id | default('?') }} / {{ item.1.route_id | default('?') }}"
+  run_once: true
+  delegate_to: localhost
+
+- name: Valider le format des backend_id et leur unicité au sein de chaque route reverse_proxy
+  ansible.builtin.assert:
+    that:
+      - (item.1.backends | map(attribute='backend_id') | list)
+          == (item.1.backends | map(attribute='backend_id') | unique | list)
+      - (item.1.backends | map(attribute='backend_id') | select('match', '^[a-z0-9-]+$') | list | length)
+          == (item.1.backends | length)
+      - (item.1.backends | selectattr('host', 'defined') | list | length) == (item.1.backends | length)
+      - (item.1.backends | selectattr('target_port', 'defined') | list | length) == (item.1.backends | length)
+    fail_msg: >-
+      {{ item.0.entry.path }} / service {{ item.0.service.service_id | default('?') }} / route
+      {{ item.1.route_id | default('?') }} : backend_id dupliqué, hors format, ou
+      backend incomplet (04E § 6.5, § 6.11).
+  loop: "{{ _service_pairs | subelements('service.routes') }}"
+  loop_control:
+    label: "{{ item.0.entry.path }} / {{ item.0.service.service_id | default('?') }} / {{ item.1.route_id | default('?') }}"
+  when: item.1.handler == 'reverse_proxy'
+  run_once: true
+  delegate_to: localhost
+
+- name: Valider les champs obligatoires d'une route redirect
+  ansible.builtin.assert:
+    that:
+      - item.1.redirect.target is defined
+      - item.1.redirect.status_code is defined
+    fail_msg: >-
+      {{ item.0.entry.path }} / service {{ item.0.service.service_id | default('?') }} / route
+      {{ item.1.route_id | default('?') }} : bloc redirect incomplet (04E § 6.5).
+  loop: "{{ _service_pairs | subelements('service.routes') }}"
+  loop_control:
+    label: "{{ item.0.entry.path }} / {{ item.0.service.service_id | default('?') }} / {{ item.1.route_id | default('?') }}"
+  when: item.1.handler == 'redirect'
+  run_once: true
+  delegate_to: localhost
+
+- name: Exposer les fiches validées
+  ansible.builtin.set_fact:
+    registry_entries: "{{ _registry_entries_raw | map(attribute='data') | list }}"
+  run_once: true
+  delegate_to: localhost
+
+- name: Résoudre domain -> project_name pour le mode ciblé
+  when: domain is defined
+  run_once: true
+  delegate_to: localhost
+  block:
+    - name: Rechercher les fiches correspondant au domaine fourni
+      ansible.builtin.set_fact:
+        _registry_domain_matches: "{{ registry_entries | selectattr('domain', 'equalto', domain) | list }}"
+
+    - name: Échouer si le domaine ne résout à aucune ou plusieurs fiches
+      ansible.builtin.assert:
+        that:
+          - _registry_domain_matches | length == 1
+        fail_msg: >-
+          Sélection ambiguë : le domaine '{{ domain }}' correspond à
+          {{ _registry_domain_matches | length }} fiche(s) dans {{ registry_path }}
+          (04E § 9.3) — une seule correspondance est attendue.
+
+    - name: Exposer le project_name résolu
+      ansible.builtin.set_fact:
+        registry_resolved_project_name: "{{ _registry_domain_matches[0].project_name }}"

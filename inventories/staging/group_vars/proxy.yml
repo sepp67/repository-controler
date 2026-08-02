@@ -1,0 +1,12 @@
+---
+# Variables du groupe [proxy] — staging
+# Conforme à 04E § 7.4 : registry_path est dérivé automatiquement de
+# environment_name par le rôle, jamais déclaré manuellement ici.
+
+environment_name: staging
+
+# ── Caddy ────────────────────────────────────────────────────────────────────
+caddy_tls_mode: internal   # tls internal, aucun ACME en staging
+
+# ── CA staging — endpoint de distribution de root.crt (04E § 10.2) ───────────
+staging_ca_endpoint_domain: ca.gites.local

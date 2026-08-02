@@ -1,0 +1,20 @@
+---
+# Migré depuis vars/projects/webcam.yml (devops_staging_prod_infra)
+# Confirme HYP-005 : bien que déployée sur une VM dédiée (vm-camera-claude,
+# réseau caméra séparé), la fiche déclare un domaine routé par caddy_proxy
+# au même titre que les autres projets — migration confirmée.
+project_name: webcam
+domain: webcam.lavallee.local
+
+published_services:
+  - service_id: web
+    listen_port: 443
+    frontend_protocol: https
+    routes:
+      - route_id: default
+        path: /
+        handler: reverse_proxy
+        backends:
+          - backend_id: primary
+            host: 192.168.1.15
+            target_port: 18086

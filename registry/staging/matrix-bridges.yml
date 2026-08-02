@@ -1,0 +1,32 @@
+---
+# Migré et fusionné depuis vars/projects/matrix-bridges.yml et
+# vars/projects/matrix-bridges-federation.yml (devops_staging_prod_infra).
+# Même remarque que matrix-users.yml : client et fédération partagent le
+# même port backend (matrix_bridges_http_port = 8009).
+project_name: matrix-bridges
+domain: matrix-bridges.local
+
+published_services:
+  - service_id: matrix-client
+    listen_port: 443
+    frontend_protocol: https
+    routes:
+      - route_id: default
+        path: /
+        handler: reverse_proxy
+        backends:
+          - backend_id: primary
+            host: 192.168.1.77
+            target_port: 8009
+
+  - service_id: matrix-federation
+    listen_port: 8448
+    frontend_protocol: https
+    routes:
+      - route_id: default
+        path: /
+        handler: reverse_proxy
+        backends:
+          - backend_id: primary
+            host: 192.168.1.77
+            target_port: 8009

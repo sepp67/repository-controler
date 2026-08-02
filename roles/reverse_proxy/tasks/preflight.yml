@@ -1,0 +1,83 @@
+---
+# roles/reverse_proxy/tasks/preflight.yml
+#
+# Rôle (04E § 7.3, § 9.5 ; 06B v0.2 T1.3.1 ; CLAUDE.md règle 8) :
+#   - vérifie que `registry_path` (registry/{{ environment_name }}/) est un
+#     répertoire Git propre : aucune modification indexée, non indexée, ni
+#     fichier non suivi (`git status --porcelain=v1 --untracked-files=all --
+#     {{ registry_path }}`) — sur l'intégralité du répertoire de
+#     l'environnement, jamais seulement le fichier visé par une convergence
+#     ciblée ;
+#   - vérifie qu'un commit HEAD identifiable existe ;
+#   - capture le SHA de HEAD consommé, réutilisé plus tard (en-tête de
+#     fragment T3.1.2, journal de déploiement T9.2.2).
+#   - aucune option de contournement (04E § 9.5 : « sans option de
+#     contournement » ; CLAUDE.md règle 8).
+#
+# Appelé par : tous les points d'entrée du rôle (main.yml, converge_route.yml),
+# avant toute autre tâche.
+# Précondition : `registry_path` est déjà défini (rôle defaults, T2.2.3).
+# Exécuté depuis le nœud de contrôle (le registre Git n'existe pas sur la VM
+# proxy). `git` est systématiquement invoqué avec `-C {{ registry_path }}`,
+# qui découvre lui-même la racine du dépôt en remontant l'arborescence —
+# aucune hypothèse n'est faite sur le cwd du contrôleur Ansible. C'est
+# volontaire : le module `command` n'hérite pas du cwd du processus
+# `ansible-playbook` mais utilise par défaut le répertoire du playbook inclus,
+# ce qui rendrait un `git status` sans `-C` incorrect dès que
+# `registry_path` est un chemin relatif (vérifié empiriquement).
+#
+# Sortie : `preflight_git_sha`, le SHA de HEAD consommé par cette exécution.
+
+- name: Vérifier que registry_path est défini
+  ansible.builtin.assert:
+    that:
+      - registry_path is defined
+      - registry_path | length > 0
+    fail_msg: "preflight.yml requiert que registry_path soit défini avant son inclusion (04E § 7.4)."
+  run_once: true
+  delegate_to: localhost
+
+- name: Vérifier que registry_path se trouve dans un dépôt Git
+  ansible.builtin.command:
+    cmd: "git -C {{ registry_path }} rev-parse --is-inside-work-tree"
+  register: _preflight_git_check
+  changed_when: false
+  failed_when: _preflight_git_check.rc != 0 or _preflight_git_check.stdout != 'true'
+  run_once: true
+  delegate_to: localhost
+
+- name: Vérifier qu'un commit HEAD identifiable existe
+  ansible.builtin.command:
+    cmd: "git -C {{ registry_path }} rev-parse --verify HEAD"
+  register: _preflight_head
+  changed_when: false
+  failed_when: _preflight_head.rc != 0
+  run_once: true
+  delegate_to: localhost
+
+- name: Vérifier la propreté Git de l'intégralité de registry_path
+  ansible.builtin.command:
+    cmd: "git -C {{ registry_path }} status --porcelain=v1 --untracked-files=all -- ."
+  register: _preflight_status
+  changed_when: false
+  run_once: true
+  delegate_to: localhost
+
+- name: Échouer si registry_path porte des modifications non commitées
+  ansible.builtin.assert:
+    that:
+      - _preflight_status.stdout == ""
+    fail_msg: >-
+      Préflight Git échoué : {{ registry_path }} contient des modifications non
+      commitées (indexées, non indexées, ou fichiers non suivis) — 04E § 9.5.
+      Aucune convergence ne peut démarrer tant que le registre n'est pas propre.
+      Sortie de `git status` :
+      {{ _preflight_status.stdout }}
+  run_once: true
+  delegate_to: localhost
+
+- name: Exposer le SHA de HEAD consommé par cette exécution
+  ansible.builtin.set_fact:
+    preflight_git_sha: "{{ _preflight_head.stdout }}"
+  run_once: true
+  delegate_to: localhost

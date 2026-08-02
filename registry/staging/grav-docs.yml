@@ -1,0 +1,21 @@
+---
+# Migré depuis vars/projects/grav-docs.yml (devops_staging_prod_infra)
+# Documentation interne Grav. STAGING UNIQUEMENT : grav-docs est commenté
+# dans active_projects de inventories/production/group_vars/all/main.yml —
+# aucune fiche équivalente ne doit être créée en production (§ 20.1 de 04E
+# n'en fait pas mention explicite ; confirmé ici par la donnée réelle).
+project_name: grav-docs
+domain: docs.lavallee.local
+
+published_services:
+  - service_id: web
+    listen_port: 443
+    frontend_protocol: https
+    routes:
+      - route_id: default
+        path: /
+        handler: reverse_proxy
+        backends:
+          - backend_id: primary
+            host: 192.168.1.58
+            target_port: 18084

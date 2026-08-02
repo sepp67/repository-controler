@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repository-controler.lavallee.internal/schemas/registry-entry.schema.json",
+  "title": "Fiche de registre reverse_proxy",
+  "description": "Contrat de données d'une fiche registry/<environment>/<project_name>.yml — 04E § 6.5, § 6.6, § 6.9, § 6.11, § 6.12. Ne connaît et ne contrôle que les champs de routage (04E § 6.13) : tout champ de déploiement applicatif est rejeté par additionalProperties:false. Les invariants d'unicité composites de § 6.11 (service_id/route_id/backend_id/couple frontend_protocol+listen_port par fiche, project_name par environnement) ne sont pas exprimables en JSON Schema standard sur une liste d'objets ; ils sont vérifiés par tasks/registry_load.yml via ansible.builtin.assert, conformément à la répartition explicite de 04E § 6.13 (« validation de schéma [...] via ansible.builtin.assert, complétée par un schéma JSON Schema en CI »).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["project_name", "domain", "published_services"],
+  "properties": {
+    "project_name": { "$ref": "#/$defs/identifier" },
+    "domain": { "$ref": "#/$defs/fqdn" },
+    "published_services": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/published_service" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "04E § 6.11 — minuscules ASCII, chiffres, tirets ; le caractère '_' est explicitement interdit."
+    },
+    "fqdn": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$",
+      "description": "04E § 6.10 — FQDN exact et complet, aucune composition implicite."
+    },
+    "published_service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service_id", "listen_port", "frontend_protocol", "routes"],
+      "properties": {
+        "service_id": { "$ref": "#/$defs/identifier" },
+        "listen_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "frontend_protocol": { "enum": ["http", "https"] },
+        "routes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/route" }
+        }
+      }
+    },
+    "route": {
+      "description": "04E § 6.9 — handler explicite, backends et redirect mutuellement exclusifs.",
+      "oneOf": [
+        { "$ref": "#/$defs/route_reverse_proxy" },
+        { "$ref": "#/$defs/route_redirect" }
+      ]
+    },
+    "route_reverse_proxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["route_id", "handler", "backends"],
+      "properties": {
+        "route_id": { "$ref": "#/$defs/identifier" },
+        "path": { "type": "string", "default": "/" },
+        "handler": { "const": "reverse_proxy" },
+        "strip_prefix": { "type": "boolean", "default": false },
+        "backends": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/backend" }
+        }
+      }
+    },
+    "route_redirect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["route_id", "handler", "redirect"],
+      "properties": {
+        "route_id": { "$ref": "#/$defs/identifier" },
+        "path": { "type": "string", "default": "/" },
+        "handler": { "const": "redirect" },
+        "redirect": { "$ref": "#/$defs/redirect" }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend_id", "host", "target_port"],
+      "properties": {
+        "backend_id": { "$ref": "#/$defs/identifier" },
+        "host": { "type": "string", "minLength": 1 },
+        "target_port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "redirect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "status_code"],
+      "properties": {
+        "target": { "type": "string", "minLength": 1 },
+        "status_code": { "type": "integer", "minimum": 300, "maximum": 399 }
+      }
+    }
+  }
+}

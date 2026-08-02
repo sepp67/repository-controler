@@ -1,0 +1,18 @@
+---
+# Migré depuis vars/projects/lavallee-website.yml (devops_staging_prod_infra)
+# Site portfolio/blog Hugo + Nginx. Backend sur vm-apps-staging (192.168.1.58).
+project_name: lavallee-website
+domain: lavallee.local
+
+published_services:
+  - service_id: web
+    listen_port: 443
+    frontend_protocol: https
+    routes:
+      - route_id: default
+        path: /
+        handler: reverse_proxy
+        backends:
+          - backend_id: primary
+            host: 192.168.1.58
+            target_port: 18082
