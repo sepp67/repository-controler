@@ -1,0 +1,28 @@
+---
+# roles/reverse_proxy/defaults/main.yml
+#
+# Variables de rôle par défaut (04E § 7.4, 06B v0.2 T2.2.3).
+#
+# Volontairement absentes ici (portée inventaire, pas rôle — 04E § 7.4) :
+# caddy_tls_mode, caddy_acme_email (inventories/*/group_vars/proxy.yml),
+# staging_ca_endpoint_domain (inventories/staging/group_vars/proxy.yml
+# uniquement — aucun endpoint de distribution de CA en production, 04E § 10.3).
+
+# Répertoire actif des fragments de service, importé par le fichier
+# principal Caddy (04E § 8.1, § 8.2).
+caddy_conf_d_dir: /etc/caddy/conf.d
+
+# Espace de construction et de validation, éphémère, jamais persistant
+# (04E § 8.5, ARCH-CAND-022).
+caddy_candidate_dir: /etc/caddy/candidate
+
+# Dérivé automatiquement de environment_name (défini par inventaire,
+# inventories/<environment>/group_vars/proxy.yml) — jamais fourni
+# manuellement par l'opérateur (04E § 7.4). Ancré sur playbook_dir : les deux
+# playbooks publics (playbooks/converge-proxy.yml, playbooks/converge-route.yml)
+# vivent à la racine du Control Repository, un niveau au-dessus de registry/.
+registry_path: "{{ playbook_dir }}/../registry/{{ environment_name }}/"
+
+# Journal de déploiement append-only, côté contrôleur, jamais sur la VM
+# proxy, jamais relu par le rôle (04E § 9.7, T9.2.2).
+deployment_log_path: "{{ lookup('env', 'HOME') }}/.reverse_proxy_deployment.log"

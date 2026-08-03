@@ -1,0 +1,81 @@
+---
+# roles/reverse_proxy/tasks/candidate_apply.yml
+#
+# Rôle (04E § 7.3, § 8.5, § 8.6, § 7.6 ; 06B v0.2 EPIC-04, F4.2) : bascule
+# atomique de l'espace candidat validé vers l'espace actif
+# (conf.d/ actif ↔ conf.d.previous/ ↔ candidat, par renommage de répertoire),
+# puis reload gracieux de Caddy — uniquement si un changement réel est
+# détecté. Idempotence (04E § 7.6) : si l'espace candidat est identique à
+# l'espace actif, aucun fichier actif n'est modifié et aucun reload n'a lieu.
+#
+# Appelé par : tasks/main.yml, tasks/converge_route.yml — uniquement après
+# une validation réussie (tasks/candidate_validate.yml).
+# Précondition : caddy_conf_d_dir, caddy_candidate_dir définis ; l'espace
+# candidat a déjà été construit et validé.
+#
+# Détection du « changement réel » (04E § 7.6) : les lignes d'en-tête
+# generated-at et source-commit (§ 8.4) sont exclues de la comparaison — elles
+# changent à chaque exécution même sans changement de contenu routé, ce qui
+# romprait l'idempotence si elles étaient prises en compte (constaté à
+# l'implémentation, non explicitement tranché par 04E ; résolu avec
+# l'opérateur : seul le contenu routé — domaine, port, routes, backends —
+# constitue un changement réel déclenchant bascule et reload).
+#
+# Sortie : caddy_apply_changed (bool) — utilisable par l'appelant pour son
+# rapport (PRESENT/ABSENT/no-op en mode ciblé).
+
+- name: Vérifier les entrées de candidate_apply.yml
+  ansible.builtin.assert:
+    that:
+      - caddy_conf_d_dir is defined
+      - caddy_candidate_dir is defined
+    fail_msg: "candidate_apply.yml requiert caddy_conf_d_dir et caddy_candidate_dir définis avant son inclusion."
+
+- name: Comparer l'espace candidat à l'espace actif (hors en-tête generated-at/source-commit)
+  ansible.builtin.command:
+    cmd: >-
+      diff -rq
+      -I '^# generated-at:'
+      -I '^# source-commit:'
+      {{ caddy_conf_d_dir }} {{ caddy_candidate_dir }}
+  register: _candidate_diff
+  changed_when: false
+  failed_when: _candidate_diff.rc > 1
+  become: true
+
+- name: Aucun changement réel détecté — no-op idempotent (04E § 7.6)
+  when: _candidate_diff.rc == 0
+  become: true
+  block:
+    - name: Abandonner l'espace candidat, identique à l'actif
+      ansible.builtin.file:
+        path: "{{ caddy_candidate_dir }}"
+        state: absent
+
+    - name: Exposer l'absence de changement
+      ansible.builtin.set_fact:
+        caddy_apply_changed: false
+
+- name: Basculer atomiquement vers l'espace candidat validé
+  when: _candidate_diff.rc == 1
+  become: true
+  block:
+    - name: Retirer l'ancienne sauvegarde conf.d.previous si présente
+      ansible.builtin.file:
+        path: "{{ caddy_conf_d_dir }}.previous"
+        state: absent
+
+    - name: Déplacer l'espace actif courant vers conf.d.previous
+      ansible.builtin.command:
+        cmd: "mv {{ caddy_conf_d_dir }} {{ caddy_conf_d_dir }}.previous"
+      changed_when: true
+
+    - name: Activer l'espace candidat validé (renommage atomique)
+      ansible.builtin.command:
+        cmd: "mv {{ caddy_candidate_dir }} {{ caddy_conf_d_dir }}"
+      changed_when: true
+      notify: reload caddy
+
+    - name: Exposer le changement réel appliqué
+      ansible.builtin.set_fact:
+        caddy_apply_changed: true

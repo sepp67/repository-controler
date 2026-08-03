@@ -1,0 +1,172 @@
+---
+# roles/reverse_proxy/tasks/converge_route.yml
+#
+# Rôle (04E § 7.3, § 9.3 ; 06B v0.2 EPIC-05, F5.1 — T5.1.2, T5.1.4) : point
+# d'entrée de la convergence ciblée. Détermine l'un des cinq cas
+# (PRESENT / ABSENT-service-présent / ABSENT-service-disparu / no-op /
+# incohérence) puis délègue la construction, la validation et l'application
+# de l'espace candidat aux tâches génériques partagées avec main.yml
+# (candidate_build.yml, candidate_validate.yml, candidate_apply.yml) — aucune
+# logique de bascule/validation dupliquée ici (T2.2.1bis).
+#
+# Séquence : preflight.yml → registry_load.yml (résolution domain →
+# project_name) → détermination du cas → candidate_build.yml →
+# candidate_validate.yml → candidate_apply.yml. N'appelle jamais install.yml
+# (suppose Caddy déjà installé — 04E § 7.3).
+#
+# Appelé par : playbooks/converge-route.yml.
+# Entrées attendues : environment, domain, service_id, route_id (04E § 7.4) —
+# la présence des quatre est vérifiée par playbooks/converge-route.yml
+# (T5.1.1), avant même l'inclusion de ce fichier.
+#
+# Sortie : converge_route_case (PRESENT|ABSENT_SERVICE_PRESENT|
+# ABSENT_SERVICE_DISPARU|NOOP), caddy_apply_changed (bool, absent si no-op).
+
+- name: Vérifier le format des identifiants ciblés
+  ansible.builtin.assert:
+    that:
+      - service_id is match('^[a-z0-9-]+$')
+      - route_id is match('^[a-z0-9-]+$')
+    fail_msg: "service_id et route_id doivent respecter le format [a-z0-9-]+ (04E § 6.11)."
+
+- name: Vérifier que l'environnement fourni correspond à l'inventaire chargé
+  # `environment` est un mot-clé réservé Ansible : on lit l'extra-var via
+  # hostvars pour contourner la collision (cf. playbooks/converge-route.yml).
+  vars:
+    _environment_param: "{{ hostvars[inventory_hostname]['environment'] }}"
+  ansible.builtin.assert:
+    that:
+      - _environment_param == environment_name
+    fail_msg: >-
+      L'environnement fourni (-e environment={{ _environment_param }}) ne
+      correspond pas à l'inventaire chargé ({{ environment_name }}) —
+      04E § 7.4. Vérifiez le paramètre -i de la commande ansible-playbook.
+
+- name: Préflight Git
+  ansible.builtin.include_tasks: preflight.yml
+
+- name: Chargement et validation du registre, résolution domain -> project_name
+  ansible.builtin.include_tasks: registry_load.yml
+
+- name: Résoudre la fiche cible
+  ansible.builtin.set_fact:
+    _target_entry: "{{ registry_entries | selectattr('project_name', 'equalto', registry_resolved_project_name) | first }}"
+
+- name: Résoudre la liste (0 ou 1) de services correspondant au service_id ciblé
+  # Volontairement une liste plutôt que `| first`, dont le comportement sur une
+  # liste vide n'est pas fiable à travers `default()` dans ce contexte de
+  # templating (constaté à l'implémentation : `first` sur liste vide ne
+  # produit pas un Undefined détectable, `default(None, true)` ne rattrape
+  # pas le cas — vérifié empiriquement).
+  ansible.builtin.set_fact:
+    _matching_services: "{{ _target_entry.published_services | selectattr('service_id', 'equalto', service_id) | list }}"
+
+- name: Déterminer l'existence du service et résoudre le service ciblé
+  ansible.builtin.set_fact:
+    _service_exists: "{{ (_matching_services | length) > 0 }}"
+    _target_service: "{{ _matching_services[0] if (_matching_services | length) > 0 else {} }}"
+
+- name: Déterminer l'existence de la route dans le service, si le service existe
+  ansible.builtin.set_fact:
+    _route_exists: "{{ _service_exists and ((_target_service.routes | default([]) | selectattr('route_id', 'equalto', route_id) | list | length) > 0) }}"
+
+- name: Calculer le nom de fragment attendu pour le service ciblé
+  ansible.builtin.set_fact:
+    _expected_fragment_name: "{{ _target_entry.project_name }}__{{ service_id }}.caddy"
+
+- name: Vérifier la présence d'un fragment existant au nom attendu (espace actif)
+  ansible.builtin.stat:
+    path: "{{ caddy_conf_d_dir }}/{{ _expected_fragment_name }}"
+  register: _existing_fragment_stat
+
+- name: Lire le contenu du fragment existant, le cas échéant
+  ansible.builtin.slurp:
+    src: "{{ caddy_conf_d_dir }}/{{ _expected_fragment_name }}"
+  register: _existing_fragment_slurp
+  when: _existing_fragment_stat.stat.exists
+
+- name: Extraire l'identité déclarée par l'en-tête du fragment existant
+  when: _existing_fragment_stat.stat.exists
+  vars:
+    _content: "{{ _existing_fragment_slurp.content | b64decode }}"
+  ansible.builtin.set_fact:
+    _existing_managed_by: "{{ (_content | regex_search('(?m)^# managed-by: (.*)$', '\\1') | default([], true) | first) | default('', true) }}"
+    _existing_project_name: "{{ (_content | regex_search('(?m)^# project-name: (.*)$', '\\1') | default([], true) | first) | default('', true) }}"
+    _existing_service_id: "{{ (_content | regex_search('(?m)^# service-id: (.*)$', '\\1') | default([], true) | first) | default('', true) }}"
+
+- name: Échouer sur incohérence — fragment existant non géré ou d'identité divergente (04E § 8.4, § 9.3)
+  when: >-
+    _existing_fragment_stat.stat.exists and
+    (_existing_managed_by != 'ansible-role-reverse-proxy' or
+     _existing_project_name != _target_entry.project_name or
+     _existing_service_id != service_id)
+  ansible.builtin.fail:
+    msg: >-
+      Incohérence : {{ _expected_fragment_name }} existe dans {{ caddy_conf_d_dir }}
+      sans en-tête géré valide, ou avec un en-tête déclarant un couple
+      project-name/service-id différent de celui attendu
+      ({{ _target_entry.project_name }}/{{ service_id }}) — échec sans bascule
+      (04E § 8.4, § 9.3).
+
+- name: Établir si un fragment géré et vérifié existe déjà
+  ansible.builtin.set_fact:
+    _managed_fragment_exists: "{{ _existing_fragment_stat.stat.exists }}"
+
+- name: Déterminer le cas de convergence ciblée
+  ansible.builtin.set_fact:
+    converge_route_case: >-
+      {{
+        'PRESENT' if (_service_exists and _route_exists)
+        else 'ABSENT_SERVICE_PRESENT' if (_service_exists and not _route_exists)
+        else 'ABSENT_SERVICE_DISPARU' if (not _service_exists and _managed_fragment_exists)
+        else 'NOOP'
+      }}
+
+- name: Rapporter un no-op idempotent (04E § 9.3, § 7.6)
+  when: converge_route_case == 'NOOP'
+  ansible.builtin.debug:
+    msg: >-
+      No-op : ni la route {{ route_id }}, ni un fragment géré pour le service
+      {{ service_id }} n'existent — aucune modification (04E § 9.3).
+
+- name: Construire, valider et appliquer l'espace candidat (cas PRESENT / ABSENT-service-présent)
+  when: converge_route_case in ['PRESENT', 'ABSENT_SERVICE_PRESENT']
+  vars:
+    caddy_candidate_fragments_to_render:
+      - project_name: "{{ _target_entry.project_name }}"
+        domain: "{{ _target_entry.domain }}"
+        service: "{{ _target_service }}"
+    caddy_candidate_fragments_to_remove: []
+  block:
+    - name: Construire l'espace candidat
+      ansible.builtin.include_tasks: candidate_build.yml
+    - name: Valider l'espace candidat
+      ansible.builtin.include_tasks: candidate_validate.yml
+    - name: Appliquer l'espace candidat validé
+      ansible.builtin.include_tasks: candidate_apply.yml
+
+- name: Construire, valider et appliquer l'espace candidat (cas ABSENT-service-disparu)
+  when: converge_route_case == 'ABSENT_SERVICE_DISPARU'
+  vars:
+    caddy_candidate_fragments_to_render: []
+    caddy_candidate_fragments_to_remove:
+      - "{{ _expected_fragment_name }}"
+  block:
+    - name: Construire l'espace candidat
+      ansible.builtin.include_tasks: candidate_build.yml
+    - name: Valider l'espace candidat
+      ansible.builtin.include_tasks: candidate_validate.yml
+    - name: Appliquer l'espace candidat validé
+      ansible.builtin.include_tasks: candidate_apply.yml
+
+- name: Consigner cette convergence ciblée dans le journal de déploiement
+  ansible.builtin.include_tasks: deployment_log.yml
+  vars:
+    deployment_journal_entry:
+      playbook: converge-route.yml
+      mode: targeted
+      domain: "{{ domain }}"
+      service_id: "{{ service_id }}"
+      route_id: "{{ route_id }}"
+      case: "{{ converge_route_case }}"
+      changed: "{{ caddy_apply_changed | default(false) }}"

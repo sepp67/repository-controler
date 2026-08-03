@@ -1,0 +1,46 @@
+---
+# playbooks/converge-route.yml
+#
+# Convergence ciblée d'un service à partir d'une route identifiée (04E § 5,
+# § 9.3 ; 06B v0.2 T5.1.1). Comportement PRESENT / ABSENT-service-présent /
+# ABSENT-service-disparu / no-op / incohérence — implémenté par
+# roles/reverse_proxy/tasks/converge_route.yml.
+#
+# N'écrit jamais dans registry/ (04E § 9.4, règle absolue) : l'opérateur
+# édite, commit et push la fiche concernée avant d'exécuter ce playbook.
+#
+# Interface :
+#   ansible-playbook -i inventories/<environment>/hosts.yml \
+#     playbooks/converge-route.yml \
+#     -e environment=<staging|production> \
+#     -e domain=<fqdn de la fiche> \
+#     -e service_id=<service publié ciblé> \
+#     -e route_id=<route ciblée>
+
+- name: Convergence ciblée d'une route
+  hosts: proxy
+  gather_facts: false
+  tasks:
+    - name: Vérifier que les quatre paramètres requis sont fournis
+      # NB : `environment` est un mot-clé réservé Ansible (variables
+      # d'environnement de tâche) ; {{ environment }} ne lit jamais l'extra-var
+      # -e environment=... et `environment is defined` est toujours vrai,
+      # même en son absence. hostvars[inventory_hostname]['environment']
+      # contourne la collision sans changer l'interface documentée (04E § 9.3).
+      ansible.builtin.assert:
+        that:
+          - hostvars[inventory_hostname]['environment'] is defined
+          - domain is defined
+          - service_id is defined
+          - route_id is defined
+        fail_msg: >-
+          converge-route.yml requiert les quatre paramètres :
+          -e environment=... -e domain=... -e service_id=... -e route_id=...
+          (04E § 9.3, T5.1.1).
+      run_once: true  # noqa: run-once[task] — stratégie linear (défaut), aucun besoin de "free" dans ce rôle
+      delegate_to: localhost
+
+    - name: Convergence ciblée
+      ansible.builtin.include_role:
+        name: reverse_proxy
+        tasks_from: converge_route

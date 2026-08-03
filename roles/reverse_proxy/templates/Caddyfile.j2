@@ -1,0 +1,26 @@
+{
+{% if caddy_tls_mode == 'acme' %}
+    email {{ caddy_acme_email }}
+{% elif caddy_tls_mode == 'internal' %}
+    local_certs
+{% endif %}
+}
+
+{% if caddy_tls_mode == 'internal' %}
+# Endpoint HTTP interne dédié de distribution de la CA staging (04E § 10.2).
+# Sert exclusivement le certificat public root.crt, en lecture seule ; jamais
+# présent en production (caddy_tls_mode != internal, § 10.3). N'expose ni la
+# clé privée ni le reste du répertoire PKI : seul le chemin exact /root.crt
+# est routé.
+{{ staging_ca_endpoint_domain }} {
+    handle /root.crt {
+        root * /var/lib/caddy/.local/share/caddy/pki/authorities/local
+        file_server
+    }
+    handle {
+        respond 404
+    }
+}
+{% endif %}
+
+import {{ caddy_conf_d_dir }}/*.caddy

@@ -38,7 +38,7 @@
   delegate_to: localhost
 
 - name: Vérifier que registry_path se trouve dans un dépôt Git
-  ansible.builtin.command:
+  ansible.builtin.command:  # noqa: command-instead-of-module — ansible.builtin.git ne couvre pas rev-parse
     cmd: "git -C {{ registry_path }} rev-parse --is-inside-work-tree"
   register: _preflight_git_check
   changed_when: false
@@ -47,7 +47,7 @@
   delegate_to: localhost
 
 - name: Vérifier qu'un commit HEAD identifiable existe
-  ansible.builtin.command:
+  ansible.builtin.command:  # noqa: command-instead-of-module — ansible.builtin.git ne couvre pas rev-parse
     cmd: "git -C {{ registry_path }} rev-parse --verify HEAD"
   register: _preflight_head
   changed_when: false
@@ -56,7 +56,7 @@
   delegate_to: localhost
 
 - name: Vérifier la propreté Git de l'intégralité de registry_path
-  ansible.builtin.command:
+  ansible.builtin.command:  # noqa: command-instead-of-module — ansible.builtin.git ne couvre pas status --porcelain
     cmd: "git -C {{ registry_path }} status --porcelain=v1 --untracked-files=all -- ."
   register: _preflight_status
   changed_when: false

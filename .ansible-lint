@@ -1,0 +1,12 @@
+---
+# Configuration ansible-lint (04E § 20, 06B v0.2 F9.1).
+#
+# var-naming[no-role-prefix] est désactivée : les noms de variables du rôle
+# (registry_path, caddy_conf_d_dir, caddy_candidate_dir, registry_entries,
+# environment, domain, service_id, route_id, etc.) sont explicitement fixés
+# par 04E § 7.4 (table des variables d'entrée) — 04E est la seule source de
+# vérité de conception (CLAUDE.md) ; les renommer pour satisfaire la
+# convention de préfixe par défaut d'ansible-lint constituerait une déviation
+# silencieuse de l'architecture, ce que CLAUDE.md interdit explicitement.
+skip_list:
+  - var-naming[no-role-prefix]

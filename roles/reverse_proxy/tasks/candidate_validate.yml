@@ -1,0 +1,52 @@
+---
+# roles/reverse_proxy/tasks/candidate_validate.yml
+#
+# Rôle (04E § 7.3, § 8.5 ; 06B v0.2 EPIC-04, F4.1) : exécute `caddy validate`
+# sur l'espace candidat complet (caddy_candidate_dir). Réutilise
+# templates/Caddyfile.j2 (même structure que le fichier principal réel,
+# § 8.2) pointé temporairement vers caddy_candidate_dir plutôt que
+# caddy_conf_d_dir, pour valider exactement ce qui serait activé — sans
+# jamais écrire dans le fichier principal réel. Le fichier temporaire est
+# toujours retiré, y compris en cas d'échec de validation.
+#
+# Toute application est bloquée si la validation échoue — l'échec de cette
+# tâche interrompt le playbook avant toute bascule, aucun fichier actif
+# modifié (04E § 9.2, § 9.4, § 9.6).
+#
+# Appelé par : tasks/main.yml, tasks/converge_route.yml — après
+# tasks/candidate_build.yml, avant tasks/candidate_apply.yml.
+# Précondition : caddy_candidate_dir défini et déjà construit.
+
+- name: Vérifier les entrées de candidate_validate.yml
+  ansible.builtin.assert:
+    that:
+      - caddy_candidate_dir is defined
+      - caddy_tls_mode is defined
+    fail_msg: "candidate_validate.yml requiert caddy_candidate_dir et caddy_tls_mode définis avant son inclusion."
+
+- name: Calculer le chemin du fichier Caddy temporaire de validation
+  ansible.builtin.set_fact:
+    _candidate_validate_file: "{{ caddy_candidate_dir | dirname }}/.candidate-validate.Caddyfile"
+
+- name: Générer un fichier Caddy principal temporaire pointant vers l'espace candidat
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: "{{ _candidate_validate_file }}"
+    mode: "0644"
+  vars:
+    caddy_conf_d_dir: "{{ caddy_candidate_dir }}"
+  become: true
+
+- name: Exécuter caddy validate puis nettoyer le fichier temporaire, y compris en cas d'échec
+  block:
+    - name: Exécuter caddy validate sur l'espace candidat
+      ansible.builtin.command:
+        cmd: "caddy validate --config {{ _candidate_validate_file }} --adapter caddyfile"
+      changed_when: false
+      become: true
+  always:
+    - name: Retirer le fichier Caddy temporaire de validation
+      ansible.builtin.file:
+        path: "{{ _candidate_validate_file }}"
+        state: absent
+      become: true

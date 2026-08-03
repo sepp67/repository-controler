@@ -1,0 +1,91 @@
+---
+# roles/reverse_proxy/tasks/candidate_build.yml
+#
+# Rôle (04E § 7.3, § 8.5 ; 06B v0.2 EPIC-04, F4.1) : construit l'espace
+# candidat complet (caddy_candidate_dir) à partir d'une copie de l'espace
+# actif (caddy_conf_d_dir), puis applique les changements visés — jamais une
+# écriture directe dans caddy_conf_d_dir. « Pour converge-route.yml, seul le
+# fragment du service ciblé est régénéré dans l'espace candidat ; tous les
+# autres fragments actifs sont recopiés à l'identique. » (04E § 8.5)
+#
+# Générique et réutilisable par les deux modes de convergence : ce fichier ne
+# décide jamais lui-même quels fragments régénérer ou retirer (résolution
+# PRESENT/ABSENT/no-op/incohérence pour converge_route.yml, détection des
+# orphelins pour main.yml) — cette décision appartient exclusivement à
+# l'appelant, pour éviter toute logique dupliquée entre converge_route.yml et
+# main.yml (T2.2.1bis).
+#
+# Appelé par : tasks/main.yml, tasks/converge_route.yml.
+#
+# Entrées attendues (définies par l'appelant avant inclusion) :
+#   caddy_candidate_fragments_to_render : liste de {project_name, domain, service}
+#                                          (un élément par fragment à régénérer,
+#                                          même forme que les entrées de
+#                                          fragment_render.yml)
+#   caddy_candidate_fragments_to_remove : liste de noms de fichiers
+#                                          (<project_name>__<service_id>.caddy)
+#                                          à retirer de l'espace candidat après
+#                                          la copie — défaut []
+# Précondition : caddy_conf_d_dir, caddy_candidate_dir définis (rôle
+# defaults) ; preflight_git_sha défini (consommé par fragment_render.yml).
+#
+# Sortie : caddy_candidate_dir, espace candidat complet prêt pour
+# tasks/candidate_validate.yml.
+
+- name: Vérifier les entrées de candidate_build.yml
+  ansible.builtin.assert:
+    that:
+      - caddy_conf_d_dir is defined
+      - caddy_candidate_dir is defined
+      - caddy_candidate_fragments_to_render is defined
+    fail_msg: >-
+      candidate_build.yml requiert caddy_conf_d_dir, caddy_candidate_dir et
+      caddy_candidate_fragments_to_render définis avant son inclusion (04E § 8.5).
+
+- name: Repartir d'un espace candidat vierge (non persistant — 04E § 12)
+  ansible.builtin.file:
+    path: "{{ caddy_candidate_dir }}"
+    state: absent
+  become: true
+
+- name: S'assurer que l'espace actif existe (première exécution)
+  ansible.builtin.file:
+    path: "{{ caddy_conf_d_dir }}"
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Recréer l'espace candidat
+  ansible.builtin.file:
+    path: "{{ caddy_candidate_dir }}"
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Copier l'espace actif dans l'espace candidat
+  ansible.builtin.copy:
+    src: "{{ caddy_conf_d_dir }}/"
+    dest: "{{ caddy_candidate_dir }}/"
+    remote_src: true
+    mode: preserve
+  become: true
+
+- name: Régénérer les fragments visés dans l'espace candidat
+  ansible.builtin.include_tasks: fragment_render.yml
+  loop: "{{ caddy_candidate_fragments_to_render }}"
+  loop_control:
+    loop_var: _fragment_job
+    label: "{{ _fragment_job.project_name }} / {{ _fragment_job.service.service_id }}"
+  vars:
+    fragment_project_name: "{{ _fragment_job.project_name }}"
+    fragment_domain: "{{ _fragment_job.domain }}"
+    fragment_service: "{{ _fragment_job.service }}"
+
+- name: Retirer les fragments visés par un retrait explicite
+  ansible.builtin.file:
+    path: "{{ caddy_candidate_dir }}/{{ _fragment_name }}"
+    state: absent
+  loop: "{{ caddy_candidate_fragments_to_remove | default([]) }}"
+  loop_control:
+    loop_var: _fragment_name
+  become: true

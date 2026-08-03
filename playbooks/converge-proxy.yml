@@ -1,0 +1,24 @@
+---
+# playbooks/converge-proxy.yml
+#
+# Convergence complète et transactionnelle d'une VM proxy depuis le registre
+# (04E § 5, § 9.2 ; 06B v0.2 T6.1.1). Aucun paramètre de sélection : régénère
+# l'intégralité des fragments attendus pour l'environnement de l'inventaire
+# chargé, exclut les fragments gérés devenus orphelins, échoue intégralement
+# si une seule fiche est invalide — implémenté par
+# roles/reverse_proxy/tasks/main.yml.
+#
+# N'écrit jamais dans registry/ (04E § 9.4, règle absolue).
+#
+# Interface :
+#   ansible-playbook -i inventories/<environment>/hosts.yml \
+#     playbooks/converge-proxy.yml
+
+- name: Convergence complète transactionnelle
+  hosts: proxy
+  gather_facts: true
+  tasks:
+    - name: Convergence complète
+      ansible.builtin.include_role:
+        name: reverse_proxy
+        tasks_from: main

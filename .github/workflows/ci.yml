@@ -1,0 +1,60 @@
+---
+# CI de validation de forme et de schéma (04E § 20, 06B v0.2 F9.1).
+#
+# N'exécute jamais converge-proxy.yml / converge-route.yml contre une VM
+# réelle : validation statique uniquement (yamllint, schéma JSON, syntaxe
+# Ansible) + suite de tests fonctionnels sur environnement jetable (tests/).
+# Ne touche jamais registry/ en écriture (04E § 9.4).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-schema:
+    name: Forme, schéma, syntaxe Ansible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Installer les outils de validation
+        run: |
+          pip install yamllint ansible-core ansible-lint jsonschema PyYAML
+
+      - name: yamllint — registry/ et inventories/ (T1.2.3)
+        run: yamllint -c .yamllint.yml registry/ inventories/
+
+      - name: Validation JSON Schema du registre (T1.2.1bis)
+        run: python3 schemas/validate_registry.py
+
+      - name: ansible-playbook --syntax-check
+        run: |
+          ansible-playbook --syntax-check playbooks/converge-proxy.yml
+          ansible-playbook --syntax-check playbooks/converge-route.yml
+
+      - name: ansible-lint
+        run: ansible-lint roles/ playbooks/
+
+  functional-tests:
+    name: Suite de tests fonctionnels (04E § 20)
+    runs-on: ubuntu-latest
+    needs: lint-and-schema
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Installer Ansible
+        run: pip install ansible-core
+
+      - name: Exécuter la suite de tests fonctionnels
+        run: bash tests/run_tests.sh

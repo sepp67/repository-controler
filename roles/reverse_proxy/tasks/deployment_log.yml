@@ -1,0 +1,30 @@
+---
+# roles/reverse_proxy/tasks/deployment_log.yml
+#
+# Rôle (04E § 9.7 ; 06B v0.2 T9.2.2) : journal de déploiement append-only,
+# côté contrôleur Ansible, jamais sur la VM proxy. Une ligne JSON par
+# exécution réussie de converge-proxy.yml/converge-route.yml (playbook,
+# paramètres, SHA de commit consommé, résultat). Ce journal ne participe
+# jamais aux décisions du rôle — aucune tâche ne le relit.
+#
+# Appelé par : tasks/main.yml, tasks/converge_route.yml — uniquement à la
+# toute fin, après une exécution réussie (succès ou no-op).
+# Précondition : preflight_git_sha défini ; deployment_journal_entry défini
+# par l'appelant (dict décrivant le mode et son résultat).
+
+- name: Consigner cette exécution dans le journal de déploiement append-only
+  ansible.builtin.lineinfile:
+    path: "{{ deployment_log_path }}"
+    create: true
+    mode: "0600"
+    insertafter: EOF
+    line: >-
+      {{
+        {
+          'timestamp': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ'),
+          'environment': environment_name,
+          'source_commit': preflight_git_sha,
+        } | combine(deployment_journal_entry) | to_json
+      }}
+  run_once: true
+  delegate_to: localhost

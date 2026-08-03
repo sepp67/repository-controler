@@ -1,0 +1,112 @@
+---
+# roles/reverse_proxy/tasks/main.yml
+#
+# Rôle (04E § 7.3, § 9.2, § 8.7 ; 06B v0.2 EPIC-06, F6.1 — T6.1.2) : point
+# d'entrée de la convergence complète transactionnelle. Séquence : preflight
+# → installation de Caddy (idempotente) → chargement de TOUTES les fiches de
+# l'environnement (échec intégral avant toute modification si une seule est
+# invalide, 04E § 9.2, § 6.13) → régénération d'un fragment par service
+# publié attendu → exclusion des fragments gérés devenus orphelins (§ 8.7,
+# sans index, recalculée à chaque exécution à partir du registre et des
+# en-têtes déjà présents) → candidate_build.yml → candidate_validate.yml →
+# candidate_apply.yml.
+#
+# Appelé par : playbooks/converge-proxy.yml (aucun paramètre de sélection).
+#
+# Nettoyage des orphelins (04E § 8.7) : un fragment *.caddy actif portant un
+# en-tête managed-by valide dont le couple project-name/service-id déclaré ne
+# correspond à aucun service publié actuel du registre est exclu (retiré) de
+# l'espace candidat. Un fichier sans en-tête managed-by est ignoré et
+# seulement signalé, jamais supprimé. Contrairement à converge_route.yml
+# (§ 9.3), ce chemin ne vérifie pas la cohérence nom de fichier ↔ en-tête
+# pour les fragments toujours attendus : ceux-ci sont de toute façon
+# régénérés intégralement, donc leur ancien contenu n'est jamais consulté ni
+# fait autorité (04E § 8.7 ne prévoit pas de cas « incohérence » pour la
+# convergence complète, à la différence de § 9.3).
+
+- name: Préflight Git
+  ansible.builtin.include_tasks: preflight.yml
+
+- name: Installation et configuration globale de Caddy (idempotente)
+  ansible.builtin.include_tasks: install.yml
+
+- name: Chargement et validation de toutes les fiches (échec intégral si une seule est invalide)
+  ansible.builtin.include_tasks: registry_load.yml
+
+- name: Réinitialiser les listes de travail de cette convergence
+  ansible.builtin.set_fact:
+    caddy_candidate_fragments_to_render: []
+    _expected_fragment_identities: []
+
+- name: Construire la liste des fragments attendus et l'ensemble des identités attendues
+  ansible.builtin.set_fact:
+    caddy_candidate_fragments_to_render: "{{ caddy_candidate_fragments_to_render + [{'project_name': item.0.project_name, 'domain': item.0.domain, 'service': item.1}] }}"
+    _expected_fragment_identities: "{{ _expected_fragment_identities + [item.0.project_name ~ '/' ~ item.1.service_id] }}"
+  loop: "{{ registry_entries | subelements('published_services') }}"
+  loop_control:
+    label: "{{ item.0.project_name }} / {{ item.1.service_id }}"
+
+- name: Lister les fragments actuellement actifs
+  ansible.builtin.find:
+    paths: "{{ caddy_conf_d_dir }}"
+    patterns: "*.caddy"
+    file_type: file
+  register: _active_fragments
+
+- name: Lire le contenu de chaque fragment actif
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop: "{{ _active_fragments.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: _active_fragments_slurp
+
+- name: Signaler les fragments *.caddy actifs sans en-tête géré (jamais touchés)
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.path }} ne porte pas d'en-tête managed-by valide :
+      ignoré, jamais lu comme géré, jamais supprimé (04E § 8.4, § 8.7).
+  loop: "{{ _active_fragments_slurp.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+  vars:
+    _content: "{{ item.content | b64decode }}"
+    _managed_by: "{{ (_content | regex_search('(?m)^# managed-by: (.*)$', '\\1') | default([], true) | first) | default('', true) }}"
+  when: _managed_by != 'ansible-role-reverse-proxy'
+
+- name: Déterminer les fragments gérés devenus orphelins
+  ansible.builtin.set_fact:
+    caddy_candidate_fragments_to_remove: "{{ (caddy_candidate_fragments_to_remove | default([])) + [item.item.path | basename] }}"
+  loop: "{{ _active_fragments_slurp.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+  vars:
+    _content: "{{ item.content | b64decode }}"
+    _managed_by: "{{ (_content | regex_search('(?m)^# managed-by: (.*)$', '\\1') | default([], true) | first) | default('', true) }}"
+    _project_name: "{{ (_content | regex_search('(?m)^# project-name: (.*)$', '\\1') | default([], true) | first) | default('', true) }}"
+    _service_id: "{{ (_content | regex_search('(?m)^# service-id: (.*)$', '\\1') | default([], true) | first) | default('', true) }}"
+  when:
+    - _managed_by == 'ansible-role-reverse-proxy'
+    - (_project_name ~ '/' ~ _service_id) not in _expected_fragment_identities
+
+- name: Construire, valider et appliquer l'espace candidat complet
+  # caddy_candidate_fragments_to_remove peut rester non défini si aucun
+  # orphelin n'a été détecté (la tâche précédente ne s'exécute alors jamais) :
+  # candidate_build.yml gère déjà `| default([])` en interne, pas besoin de
+  # le redéfinir ici (une réaffectation du même nom via `vars:` provoquerait
+  # une référence circulaire — constaté à l'implémentation).
+  block:
+    - name: Construire l'espace candidat
+      ansible.builtin.include_tasks: candidate_build.yml
+    - name: Valider l'espace candidat
+      ansible.builtin.include_tasks: candidate_validate.yml
+    - name: Appliquer l'espace candidat validé
+      ansible.builtin.include_tasks: candidate_apply.yml
+
+- name: Consigner cette convergence complète dans le journal de déploiement
+  ansible.builtin.include_tasks: deployment_log.yml
+  vars:
+    deployment_journal_entry:
+      playbook: converge-proxy.yml
+      mode: full
+      changed: "{{ caddy_apply_changed }}"

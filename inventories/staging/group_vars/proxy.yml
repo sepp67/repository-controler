@@ -9,4 +9,4 @@ environment_name: staging
 caddy_tls_mode: internal   # tls internal, aucun ACME en staging
 
 # ── CA staging — endpoint de distribution de root.crt (04E § 10.2) ───────────
-staging_ca_endpoint_domain: ca.gites.local
+staging_ca_endpoint_domain: ca.lavallee.local

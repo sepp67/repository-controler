@@ -1,0 +1,35 @@
+# ------------------------------------------------------------
+# managed-by: ansible-role-reverse-proxy
+# schema-version: 1
+# project-name: {{ fragment_project_name }}
+# domain: {{ fragment_domain }}
+# service-id: {{ fragment_service.service_id }}
+# listen-port: {{ fragment_service.listen_port }}
+# frontend-protocol: {{ fragment_service.frontend_protocol }}
+{% for route in fragment_service.routes -%}
+# route-id: {{ route.route_id }}
+{% endfor -%}
+# source-commit: {{ fragment_source_commit }}
+# generated-at: {{ fragment_generated_at }}
+#
+# DO NOT EDIT — généré depuis registry/{{ environment_name }}/{{ fragment_project_name }}.yml
+# ------------------------------------------------------------
+
+{{ fragment_domain }}:{{ fragment_service.listen_port }} {
+{% for route in fragment_service.routes %}
+{% if route.path == '/' %}
+    handle {
+{% elif route.handler == 'reverse_proxy' and route.strip_prefix | default(false) %}
+    handle_path {{ route.path }} {
+{% else %}
+    handle {{ route.path }} {
+{% endif %}
+{% if route.handler == 'reverse_proxy' %}
+        reverse_proxy {% for backend in route.backends %}{{ backend.host }}:{{ backend.target_port }}{{ ' ' if not loop.last else '' }}{% endfor %}
+
+{% else %}
+        redir {{ route.redirect.target }} {{ route.redirect.status_code }}
+{% endif %}
+    }
+{% endfor %}
+}

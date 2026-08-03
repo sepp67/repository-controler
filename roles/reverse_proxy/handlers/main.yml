@@ -1,0 +1,13 @@
+---
+# roles/reverse_proxy/handlers/main.yml
+#
+# Reload gracieux de Caddy (04E § 8.6) : systemctl reload, jamais restart.
+# Notifié exclusivement par tasks/candidate_apply.yml, uniquement lorsqu'une
+# bascule atomique réelle a eu lieu (jamais sur un no-op idempotent).
+
+- name: Reload caddy
+  ansible.builtin.systemd:
+    name: caddy
+    state: reloaded
+  become: true
+  listen: reload caddy

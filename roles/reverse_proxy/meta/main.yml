@@ -1,0 +1,22 @@
+---
+# roles/reverse_proxy/meta/main.yml
+#
+# Plateformes supportées : Debian et Ubuntu exclusivement (04E § 3.1,
+# ARCH-CAND-027). Aucune autre distribution, SELinux hors périmètre,
+# compatibilité AppArmor non vérifiée (HYP-006).
+# Déclaratif uniquement : la garde exécutable réelle est dans tasks/install.yml.
+
+galaxy_info:
+  author: Lavallee Infrastructure
+  description: Gestion déclarative des reverse proxies Caddy (staging, production) — routage HTTP/HTTPS uniquement.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Debian
+      versions:
+        - all
+    - name: Ubuntu
+      versions:
+        - all
+
+dependencies: []
