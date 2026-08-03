@@ -32,12 +32,12 @@ générique de 04E.
 
 | Élément | Staging | Production |
 | --- | --- | --- |
-| VM proxy (nouvelle, dédiée au Control Repository) | `192.168.1.93` | `192.168.1.95` |
+| VM proxy (nouvelle, dédiée au Control Repository) | `192.168.1.96` | `192.168.1.95` |
 | `caddy_tls_mode` | `internal` | `acme` |
 | `caddy_acme_email` | — | `admin@lavallee.tech` (valeur réelle du dépôt source) |
 | Domaine endpoint `root.crt` (04E § 10.2) | `ca.lavallee.local` | (non applicable) |
 
-Ces VM (`.93`/`.95`) sont **distinctes** des anciennes VM proxy du dépôt
+Ces VM (`.96`/`.95`) sont **distinctes** des anciennes VM proxy du dépôt
 source (`vm-proxy-staging` = `192.168.1.56`, `vm-proxy-prod` = `192.168.1.69`,
 cette dernière elle-même un placeholder `TODO` jamais résolu dans le dépôt
 source). Ne pas confondre les deux lors d'une éventuelle consultation croisée

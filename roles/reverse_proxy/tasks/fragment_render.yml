@@ -51,3 +51,4 @@
     src: fragment.caddy.j2
     dest: "{{ caddy_candidate_dir }}/{{ fragment_filename }}"
     mode: "0644"
+  become: true

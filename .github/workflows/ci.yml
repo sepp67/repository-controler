@@ -42,6 +42,9 @@ jobs:
       - name: ansible-lint
         run: ansible-lint roles/ playbooks/
 
+      - name: "Vérification statique become:true sur les tâches d'écriture VM cible"
+        run: python3 tests/check_become.py
+
   functional-tests:
     name: Suite de tests fonctionnels (04E § 20)
     runs-on: ubuntu-latest

@@ -95,7 +95,7 @@
     owner: caddy
     group: caddy
     mode: "0644"
-    validate: "caddy validate --config %s"
+    validate: "caddy validate --config %s --adapter caddyfile"
   become: true
 
 - name: S'assurer que le service Caddy est actif et activé au démarrage

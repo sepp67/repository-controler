@@ -73,6 +73,77 @@ cat > "$ROLE_COPY/reverse_proxy/tasks/install.yml" << 'EOF'
     mode: "0755"
 EOF
 
+# ---------------------------------------------------------------------------
+# Résolution du rôle via ansible.cfg (sans ANSIBLE_ROLES_PATH), comme le
+# ferait réellement un opérateur exécutant la commande documentée dans le
+# README depuis la racine du dépôt. Sans roles_path = roles dans
+# ansible.cfg, Ansible ne cherche que playbooks/roles/ (relatif au playbook),
+# jamais roles/ à la racine — constaté sur une exécution réelle contre
+# staging, jamais couvert par les tests jusqu'ici puisqu'ils fixaient tous
+# ANSIBLE_ROLES_PATH. --list-tasks résout entièrement les rôles/includes sans
+# rien exécuter (pas besoin de sudo/SSH réel).
+# ---------------------------------------------------------------------------
+section "Résolution du rôle via ansible.cfg (sans ANSIBLE_ROLES_PATH)"
+
+if (cd "$REPO_ROOT" && env -u ANSIBLE_ROLES_PATH ansible-playbook --list-tasks playbooks/converge-proxy.yml > "$WORKDIR/last_run.log" 2>&1) \
+   && (cd "$REPO_ROOT" && env -u ANSIBLE_ROLES_PATH ansible-playbook --list-tasks playbooks/converge-route.yml >> "$WORKDIR/last_run.log" 2>&1); then
+  pass "les deux playbooks résolvent le rôle reverse_proxy sans ANSIBLE_ROLES_PATH (via ansible.cfg)"
+else
+  fail "résolution du rôle via ansible.cfg"
+fi
+
+# ---------------------------------------------------------------------------
+# Vérification statique become: true (04E — aucune section dédiée ; constaté
+# à l'usage réel, deux fois : install.yml puis fragment_render.yml). La
+# suite fonctionnelle ci-dessous retire `become: true` de sa copie de rôle
+# pour s'exécuter sans droits root (cf. plus haut) : elle ne peut donc
+# jamais, structurellement, détecter un `become` manquant. Seule une analyse
+# statique du vrai fichier peut le faire.
+# ---------------------------------------------------------------------------
+section "Vérification statique become: true"
+
+if python3 "$REPO_ROOT/tests/check_become.py" > "$WORKDIR/last_run.log" 2>&1; then
+  pass "aucune tâche d'écriture sur la VM cible sans become: true"
+else
+  fail "vérification become: true — voir $WORKDIR/last_run.log"
+  cat "$WORKDIR/last_run.log"
+fi
+
+# ---------------------------------------------------------------------------
+# Dépôt réel du fichier principal Caddy, avec le paramètre `validate:` exact
+# d'install.yml — jamais exercé ailleurs (install.yml est stubbé dans le
+# reste de cette suite, apt/systemd n'étant pas testables sans VM Debian/
+# Ubuntu ni droits root). Constaté sur une exécution réelle contre staging :
+# sans `--adapter caddyfile`, `caddy validate --config %s` échoue sur le
+# fichier temporaire d'Ansible (nom sans extension reconnaissable, Caddy
+# suppose du JSON par défaut).
+# ---------------------------------------------------------------------------
+section "Dépôt du fichier principal Caddy (validate: exact d'install.yml)"
+
+MAINCFG_DIR="$WORKDIR/maincfg"
+mkdir -p "$MAINCFG_DIR"
+INSTALL_VALIDATE_LINE=$(grep -A8 "Déposer le fichier principal Caddy" "$REPO_ROOT/roles/reverse_proxy/tasks/install.yml" | grep "validate:" | sed 's/^[[:space:]]*//')
+cat > "$WORKDIR/test_maincaddyfile.yml" << EOF
+---
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - ansible.builtin.template:
+        src: $REPO_ROOT/roles/reverse_proxy/templates/Caddyfile.j2
+        dest: $MAINCFG_DIR/Caddyfile
+        $INSTALL_VALIDATE_LINE
+      vars:
+        caddy_tls_mode: acme
+        caddy_acme_email: admin@lavallee.tech
+        caddy_conf_d_dir: $MAINCFG_DIR/conf.d
+EOF
+if ansible-playbook "$WORKDIR/test_maincaddyfile.yml" > "$WORKDIR/last_run.log" 2>&1; then
+  pass "validate: d'install.yml accepte le fichier principal rendu (--adapter caddyfile présent)"
+else
+  fail "validate: d'install.yml — voir $WORKDIR/last_run.log"
+  cat "$WORKDIR/last_run.log"
+fi
+
 export ANSIBLE_ROLES_PATH="$ROLE_COPY"
 PLAYBOOK_ROUTE="$REPO_ROOT/playbooks/converge-route.yml"
 PLAYBOOK_PROXY="$REPO_ROOT/playbooks/converge-proxy.yml"
