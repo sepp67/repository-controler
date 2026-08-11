@@ -1,0 +1,35 @@
+---
+# Migré depuis vars/projects/nextcloud.yml (devops_staging_prod_infra)
+# Service externe (project_type: external_service), administré manuellement
+# sur vm-nextcloud-staging (192.168.1.59). Les deux redirections WebDAV
+# (ancien champ racine "redirects") deviennent des routes handler: redirect,
+# conformément à 04E § 6.9 / ARCH-CAND-026, placées avant la route générique.
+project_name: nextcloud
+domain: cloud.lavallee.tech
+
+published_services:
+  - service_id: web
+    listen_port: 443
+    frontend_protocol: https
+    routes:
+      - route_id: webdav-carddav
+        path: /.well-known/carddav
+        handler: redirect
+        redirect:
+          target: /remote.php/dav
+          status_code: 301
+
+      - route_id: webdav-caldav
+        path: /.well-known/caldav
+        handler: redirect
+        redirect:
+          target: /remote.php/dav
+          status_code: 301
+
+      - route_id: default
+        path: /
+        handler: reverse_proxy
+        backends:
+          - backend_id: primary
+            host: 192.168.1.18
+            target_port: 8080
