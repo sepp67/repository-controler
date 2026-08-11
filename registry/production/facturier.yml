@@ -1,0 +1,44 @@
+---
+# Migré et fusionné depuis vars/projects/facturier-landing.yml et
+# vars/projects/facturier-app.yml (devops_staging_prod_infra) : deux anciens
+# projets partageant le même domaine deviennent une seule fiche à trois
+# routes, conformément à 04E § 6.12.4 (ARCH-CAND-001).
+# - facturier-app.yml   → routes "application" (/app/*) et "api" (/api/*,
+#                          via l'ancien champ extra_routes), port 18081
+# - facturier-landing.yml → route "landing" (/), port 18080
+# Les deux anciens projets pointaient vers le même backend (vm-apps-staging,
+# 192.168.1.58) : conservé tel quel.
+project_name: facturier
+domain: facturier.lavallee.tech
+
+published_services:
+  - service_id: web
+    listen_port: 443
+    frontend_protocol: https
+    routes:
+      - route_id: application
+        path: /app/*
+        handler: reverse_proxy
+        strip_prefix: true
+        backends:
+          - backend_id: primary
+            host: 192.168.1.17
+            target_port: 18081
+
+      - route_id: api
+        path: /api/*
+        handler: reverse_proxy
+        strip_prefix: false
+        backends:
+          - backend_id: primary
+            host: 192.168.1.17
+            target_port: 18081
+
+      - route_id: landing
+        path: /
+        handler: reverse_proxy
+        strip_prefix: false
+        backends:
+          - backend_id: primary
+            host: 192.168.1.17
+            target_port: 18080
