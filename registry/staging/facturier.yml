@@ -22,7 +22,7 @@ published_services:
         strip_prefix: true
         backends:
           - backend_id: primary
-            host: 192.168.1.58
+            host: 192.168.1.12
             target_port: 18081
 
       - route_id: api
@@ -31,7 +31,7 @@ published_services:
         strip_prefix: false
         backends:
           - backend_id: primary
-            host: 192.168.1.58
+            host: 192.168.1.12
             target_port: 18081
 
       - route_id: landing
@@ -40,5 +40,5 @@ published_services:
         strip_prefix: false
         backends:
           - backend_id: primary
-            host: 192.168.1.58
+            host: 192.168.1.12
             target_port: 18080

@@ -14,5 +14,5 @@ published_services:
         handler: reverse_proxy
         backends:
           - backend_id: primary
-            host: 192.168.1.58
+            host: 192.168.1.12
             target_port: 18082
