@@ -28,7 +28,11 @@
         reverse_proxy {% for backend in route.backends %}{{ backend.host }}:{{ backend.target_port }}{{ ' ' if not loop.last else '' }}{% endfor %}
 
 {% else %}
-        redir {{ route.redirect.target }} {{ route.redirect.status_code }}
+{#- Filtre `*` explicite : sans lui, une cible commençant par `/` est lue par
+    Caddy comme un filtre de chemin et non comme la destination (le code
+    déclaré devient alors la destination, avec un 302 par défaut). Le chemin
+    est déjà filtré par le `handle` englobant. #}
+        redir * {{ route.redirect.target }} {{ route.redirect.status_code }}
 {% endif %}
     }
 {% endfor %}

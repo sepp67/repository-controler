@@ -16,14 +16,14 @@ published_services:
         path: /.well-known/carddav
         handler: redirect
         redirect:
-          target: /remote.php/dav
+          target: /remote.php/dav/
           status_code: 301
 
       - route_id: webdav-caldav
         path: /.well-known/caldav
         handler: redirect
         redirect:
-          target: /remote.php/dav
+          target: /remote.php/dav/
           status_code: 301
 
       - route_id: default

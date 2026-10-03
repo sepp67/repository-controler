@@ -462,6 +462,105 @@ rm -f "$FIXTURE/registry/staging/broken.yml"
 git_commit_fixture "remove invalid fiche"
 
 # ---------------------------------------------------------------------------
+# Redirections — sémantique réelle de `redir` (04E § 6.9, § 8.3). Un simple
+# `caddy validate` ne suffit pas : `redir /chemin 301` est valide mais lu
+# comme filtre `/chemin` + destination `301` (statut 302). On inspecte donc
+# le JSON produit par `caddy adapt`.
+# ---------------------------------------------------------------------------
+section "Redirections — JSON produit par caddy adapt"
+
+cat > "$FIXTURE/registry/staging/redirect-test.yml" << 'EOF'
+project_name: redirect-test
+domain: redirect-test.example.org
+published_services:
+  - service_id: web
+    listen_port: 443
+    frontend_protocol: https
+    routes:
+      - route_id: webdav-carddav
+        path: /.well-known/carddav
+        handler: redirect
+        redirect:
+          target: /remote.php/dav/
+          status_code: 301
+      - route_id: webdav-caldav
+        path: /.well-known/caldav
+        handler: redirect
+        redirect:
+          target: /remote.php/dav/
+          status_code: 301
+      - route_id: absolute
+        path: /old
+        handler: redirect
+        redirect:
+          target: https://new.example.org/landing
+          status_code: 308
+      - route_id: default
+        path: /
+        handler: reverse_proxy
+        backends:
+          - backend_id: primary
+            host: 10.0.0.30
+            target_port: 8080
+EOF
+git_commit_fixture "add redirect-test fiche"
+reset_state
+REDIRECT_JSON="$WORKDIR/redirect-test.json"
+if run_proxy \
+   && caddy adapt --config "$CONF_D/redirect-test__web.caddy" --adapter caddyfile \
+        > "$REDIRECT_JSON" 2>/dev/null \
+   && python3 - "$REDIRECT_JSON" << 'PYEOF'
+import json, sys
+
+expected = {
+    "/.well-known/carddav": ("/remote.php/dav/", 301),
+    "/.well-known/caldav": ("/remote.php/dav/", 301),
+    "/old": ("https://new.example.org/landing", 308),
+}
+config = json.load(open(sys.argv[1]))
+routes = config["apps"]["http"]["servers"]["srv0"]["routes"][0]["handle"][0]["routes"]
+
+def responses(route, nested_matches):
+    """Collecte (static_response, filtres imbriqués rencontrés) sous une route."""
+    for handler in route.get("handle", []):
+        if handler["handler"] == "static_response":
+            yield handler, nested_matches
+        for sub in handler.get("routes", []):
+            yield from responses(sub, nested_matches + sub.get("match", []))
+
+found = {}
+for route in routes:
+    for matcher in route.get("match", []):
+        for path in matcher.get("path", []):
+            if path in expected:
+                found[path] = list(responses(route, []))
+
+errors = []
+for path, (target, status) in expected.items():
+    got = found.get(path)
+    if not got or len(got) != 1:
+        errors.append(f"{path} : une seule static_response attendue, trouvé {got}")
+        continue
+    handler, nested = got[0]
+    if nested:
+        errors.append(f"{path} : filtre interne inattendu {nested}")
+    if handler.get("headers", {}).get("Location") != [target]:
+        errors.append(f"{path} : Location {handler.get('headers')} != {target}")
+    if handler.get("status_code") != status:
+        errors.append(f"{path} : statut {handler.get('status_code')} != {status}")
+for error in errors:
+    print("    " + error)
+sys.exit(1 if errors else 0)
+PYEOF
+then
+  pass "redir : destination, statut déclaré conservé, aucun filtre interne (DAV relatifs + cible absolue)"
+else
+  fail "redir — voir $REDIRECT_JSON / $WORKDIR/last_run.log"
+fi
+rm -f "$FIXTURE/registry/staging/redirect-test.yml"
+git_commit_fixture "remove redirect-test fiche"
+
+# ---------------------------------------------------------------------------
 # Matrix — service à deux ports d'écoute (04E § 6.12.6, T3.2.3, F12.1)
 # ---------------------------------------------------------------------------
 section "Matrix — deux services publiés sur un même domaine"
